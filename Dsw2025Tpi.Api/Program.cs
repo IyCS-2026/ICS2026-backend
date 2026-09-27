@@ -24,6 +24,7 @@ public class Program
 
         var connectionString = builder.Configuration["DB_CONNECTION_STRING"]
             ?? builder.Configuration.GetConnectionString("Dsw2025TpiEntities")
+            ?? builder.Configuration.GetConnectionString("DB_CONNECTION_STRING")
             ?? throw new InvalidOperationException(
                 "No se configuró la connection string. Definí la app setting 'DB_CONNECTION_STRING' o 'ConnectionStrings__Dsw2025TpiEntities'.");
 
