@@ -241,11 +241,11 @@ public class Program
             }
         }
         // Configure the HTTP request pipeline.
-        if (app.Environment.IsDevelopment())
-        {
+        // Habilitación del swagger by mili123
+        
             app.UseSwagger();
             app.UseSwaggerUI();
-        }
+        
 
         if (app.Environment.IsDevelopment())
         {
