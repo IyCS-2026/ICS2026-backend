@@ -10,6 +10,8 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -21,6 +23,29 @@ public class Program
     public static async Task Main(string[] args)
     {
         var builder = WebApplication.CreateBuilder(args);
+
+        var isTesting = builder.Environment.IsEnvironment("Testing");
+
+        var connectionString = isTesting
+            ? (builder.Configuration["DB_CONNECTION_STRING"] ?? "Data Source=Dsw2025Tpi_Test;Mode=Memory;Cache=Shared")
+            : (builder.Configuration["DB_CONNECTION_STRING"]
+                ?? builder.Configuration.GetConnectionString("Dsw2025TpiEntities")
+                ?? builder.Configuration.GetConnectionString("DB_CONNECTION_STRING")
+                ?? throw new InvalidOperationException(
+                    "No se configuró la connection string. Definí la app setting 'DB_CONNECTION_STRING' o 'ConnectionStrings__Dsw2025TpiEntities'."));
+
+        if (!isTesting && !OperatingSystem.IsWindows() && connectionString.Contains("(localdb)", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "La connection string apunta a LocalDB, que no está disponible en este sistema. " +
+                "Configurá en el App Service una app setting 'DB_CONNECTION_STRING' con la cadena ADO.NET de tu SQL de Azure.");
+        }
+
+        var serverPart = connectionString
+            .Split(';')
+            .FirstOrDefault(x => x.TrimStart().StartsWith("Server=", StringComparison.OrdinalIgnoreCase)
+                              || x.TrimStart().StartsWith("Data Source=", StringComparison.OrdinalIgnoreCase));
+        Console.WriteLine($"Conectando a base de datos: {serverPart}");
 
         // Add services to the container.
         builder.Services.AddLogging(config =>
@@ -77,7 +102,14 @@ public class Program
 
         builder.Services.AddDbContext<AuthenticateContext>(options =>
         {
-            options.UseSqlServer(builder.Configuration.GetConnectionString("Dsw2025TpiEntities"));
+            if (isTesting || connectionString.Contains("Mode=Memory", StringComparison.OrdinalIgnoreCase) || connectionString.Contains(".db", StringComparison.OrdinalIgnoreCase))
+            {
+                options.UseSqlite(connectionString);
+            }
+            else
+            {
+                options.UseSqlServer(connectionString);
+            }
         });
 
         // --- AQU� EST� EL CAMBIO ---
@@ -121,7 +153,14 @@ public class Program
 
         builder.Services.AddDbContext<Dsw2025TpiContext>(options =>
         {
-            options.UseSqlServer(builder.Configuration.GetConnectionString("Dsw2025TpiEntities"));
+            if (isTesting || connectionString.Contains("Mode=Memory", StringComparison.OrdinalIgnoreCase) || connectionString.Contains(".db", StringComparison.OrdinalIgnoreCase))
+            {
+                options.UseSqlite(connectionString);
+            }
+            else
+            {
+                options.UseSqlServer(connectionString);
+            }
         });
 
         builder.Services.AddSingleton<JwtTokenService>();
@@ -153,10 +192,25 @@ public class Program
             try
             {
                 var authContext = services.GetRequiredService<AuthenticateContext>();
-                authContext.Database.Migrate();
+                if (authContext.Database.ProviderName == "Microsoft.EntityFrameworkCore.Sqlite")
+                {
+                    authContext.Database.EnsureCreated();
+                }
+                else
+                {
+                    authContext.Database.Migrate();
+                }
 
                 var context = services.GetRequiredService<Dsw2025TpiContext>();
-                context.Database.Migrate();
+                if (context.Database.ProviderName == "Microsoft.EntityFrameworkCore.Sqlite")
+                {
+                    var creator = (IRelationalDatabaseCreator)context.Database.GetService<IDatabaseCreator>();
+                    creator.CreateTables();
+                }
+                else
+                {
+                    context.Database.Migrate();
+                }
 
                 var userManager = services.GetRequiredService<UserManager<IdentityUser>>();
                 var roleManager = services.GetRequiredService<RoleManager<IdentityRole>>();
@@ -241,11 +295,8 @@ public class Program
             }
         }
         // Configure the HTTP request pipeline.
-        if (app.Environment.IsDevelopment())
-        {
-            app.UseSwagger();
-            app.UseSwaggerUI();
-        }
+        app.UseSwagger();
+        app.UseSwaggerUI();
 
         if (app.Environment.IsDevelopment())
         {
