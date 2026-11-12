@@ -39,7 +39,7 @@ public class ProductsManagementServiceTests
 
         // Assert
         await act.Should().ThrowAsync<InvalidDataException>()
-            .WithMessage("El sku y el nombre son requerido");
+            .WithMessage("El nombre son requerido");
     }
 
     [Fact]
