@@ -1,3 +1,4 @@
+
 using Dsw2025Tpi.Api.NewFolder;
 using Dsw2025Tpi.Application.Services;
 using Dsw2025Tpi.Data;
@@ -25,7 +26,7 @@ public class Program
         // Add services to the container.
         builder.Services.AddLogging(config =>
         {
-            config.ClearProviders(); //para limpiar prov por defecto
+            config.ClearProviders();
             config.AddConsole();
 
             var path = builder.Configuration.GetValue<string>("LogPath");
@@ -37,11 +38,9 @@ public class Program
 
         builder.Services.AddControllers().AddJsonOptions(opt =>
         {
-            opt.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()); 
-
+            opt.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
         });
 
-        
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen(o =>
         {
@@ -50,6 +49,7 @@ public class Program
                 Title = "Desarollo de software TPI",
                 Version = "v1",
             });
+
             o.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
             {
                 In = ParameterLocation.Header,
@@ -57,6 +57,7 @@ public class Program
                 Description = "Ingrese el token",
                 Type = SecuritySchemeType.ApiKey
             });
+
             o.AddSecurityRequirement(new OpenApiSecurityRequirement
             {
                 {
@@ -70,58 +71,60 @@ public class Program
                     },
                     Array.Empty<string>()
                 }
-             });
+            });
         });
 
         builder.Services.AddHealthChecks();
 
         builder.Services.AddDbContext<AuthenticateContext>(options =>
         {
-            options.UseSqlServer(builder.Configuration.GetConnectionString("Dsw2025TpiEntities"));
+            options.UseSqlServer(
+                builder.Configuration.GetConnectionString("Dsw2025TpiEntities"));
         });
 
-        // --- AQUÍ ESTÁ EL CAMBIO ---
         builder.Services.AddIdentity<IdentityUser, IdentityRole>(options =>
         {
             options.Password = new PasswordOptions
             {
                 RequiredLength = 8
             };
-
-          
         })
         .AddEntityFrameworkStores<AuthenticateContext>()
         .AddDefaultTokenProviders()
-        .AddErrorDescriber<SpanishIdentityErrorDescriber>(); 
-
+        .AddErrorDescriber<SpanishIdentityErrorDescriber>();
 
         var jwtConfig = builder.Configuration.GetSection("Jwt");
-        var keyText = jwtConfig["Key"] ?? throw new ArgumentNullException("JWT Key");
+        var keyText = jwtConfig["Key"]
+            ?? throw new ArgumentNullException("JWT Key");
+
         var key = Encoding.UTF8.GetBytes(keyText);
 
         builder.Services.AddAuthentication(options =>
         {
-            options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-            options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-        })
-            .AddJwtBearer(options =>
-            {
-                options.TokenValidationParameters = new TokenValidationParameters
-                {
-                    ValidateIssuer = true,
-                    ValidateAudience = true,
-                    ValidateLifetime = true,
-                    ValidateIssuerSigningKey = true,
-                    ValidIssuer = jwtConfig["Issuer"],
-                    ValidAudience = jwtConfig["Audience"],
-                    IssuerSigningKey = new SymmetricSecurityKey(key)
-                };
-            });
+            options.DefaultAuthenticateScheme =
+                JwtBearerDefaults.AuthenticationScheme;
 
+            options.DefaultChallengeScheme =
+                JwtBearerDefaults.AuthenticationScheme;
+        })
+        .AddJwtBearer(options =>
+        {
+            options.TokenValidationParameters = new TokenValidationParameters
+            {
+                ValidateIssuer = true,
+                ValidateAudience = true,
+                ValidateLifetime = true,
+                ValidateIssuerSigningKey = true,
+                ValidIssuer = jwtConfig["Issuer"],
+                ValidAudience = jwtConfig["Audience"],
+                IssuerSigningKey = new SymmetricSecurityKey(key)
+            };
+        });
 
         builder.Services.AddDbContext<Dsw2025TpiContext>(options =>
         {
-            options.UseSqlServer(builder.Configuration.GetConnectionString("Dsw2025TpiEntities"));
+            options.UseSqlServer(
+                builder.Configuration.GetConnectionString("Dsw2025TpiEntities"));
         });
 
         builder.Services.AddSingleton<JwtTokenService>();
@@ -133,107 +136,147 @@ public class Program
 
         builder.Services.AddCors(options =>
         {
-            options.AddPolicy("AllowFrontend",
-                policy =>
-                {
-                    policy.WithOrigins("http://localhost:5173") 
-                          .AllowAnyHeader()
-                          .AllowAnyMethod()
-                          .AllowCredentials();
-                });
+            options.AddPolicy("AllowFrontend", policy =>
+            {
+                policy.WithOrigins("http://localhost:5173")
+                      .AllowAnyHeader()
+                      .AllowAnyMethod()
+                      .AllowCredentials();
+            });
         });
 
         var app = builder.Build();
 
-        //para crear los roles y cargar los administradores desde el archivo JSON
-        using (var scope = app.Services.CreateScope())
+        // Inicialización de datos de la aplicación.
+        // En Testing se omite porque las pruebas utilizan bases SQLite
+        // que son creadas y administradas por CustomWebApplicationFactory.
+        if (!app.Environment.IsEnvironment("Testing"))
         {
-            var services = scope.ServiceProvider;
-
-            try
+            using (var scope = app.Services.CreateScope())
             {
-                var userManager = services.GetRequiredService<UserManager<IdentityUser>>();
-                var roleManager = services.GetRequiredService<RoleManager<IdentityRole>>();
+                var services = scope.ServiceProvider;
 
-                string adminRole = "Admin";
-                string userRole = "User";
-
-                // Crear roles si no existen
-                if (!await roleManager.RoleExistsAsync(adminRole))
+                try
                 {
-                    await roleManager.CreateAsync(new IdentityRole(adminRole));
-                    Console.WriteLine($"Rol '{adminRole}' creado.");
-                }
-                if (!await roleManager.RoleExistsAsync(userRole))
-                {
-                    await roleManager.CreateAsync(new IdentityRole(userRole));
-                    Console.WriteLine($"Rol '{userRole}' creado.");
-                }
+                    var userManager =
+                        services.GetRequiredService<UserManager<IdentityUser>>();
 
+                    var roleManager =
+                        services.GetRequiredService<RoleManager<IdentityRole>>();
 
-                string jsonFilePath = Path.Combine(AppContext.BaseDirectory, "admins.json");
-                if (File.Exists(jsonFilePath))
-                {
-                    string json = await File.ReadAllTextAsync(jsonFilePath);
-                    var adminsToSeed = JsonSerializer.Deserialize<List<AdminUser>>(json, new JsonSerializerOptions
+                    string adminRole = "Admin";
+                    string userRole = "User";
+
+                    // Crear roles si no existen.
+                    if (!await roleManager.RoleExistsAsync(adminRole))
                     {
-                        PropertyNameCaseInsensitive = true,
-                    });
+                        await roleManager.CreateAsync(new IdentityRole(adminRole));
+                        Console.WriteLine($"Rol '{adminRole}' creado.");
+                    }
 
-                    if (adminsToSeed != null)
+                    if (!await roleManager.RoleExistsAsync(userRole))
                     {
-                        foreach (var adminData in adminsToSeed)
+                        await roleManager.CreateAsync(new IdentityRole(userRole));
+                        Console.WriteLine($"Rol '{userRole}' creado.");
+                    }
+
+                    // Cargar administradores desde el archivo JSON.
+                    string jsonFilePath =
+                        Path.Combine(AppContext.BaseDirectory, "admins.json");
+
+                    if (File.Exists(jsonFilePath))
+                    {
+                        string json = await File.ReadAllTextAsync(jsonFilePath);
+
+                        var adminsToSeed =
+                            JsonSerializer.Deserialize<List<AdminUser>>(
+                                json,
+                                new JsonSerializerOptions
+                                {
+                                    PropertyNameCaseInsensitive = true,
+                                });
+
+                        if (adminsToSeed != null)
                         {
-                            var adminUser = await userManager.FindByNameAsync(adminData.Username);
-                            if (adminUser == null)
+                            foreach (var adminData in adminsToSeed)
                             {
-                                adminUser = new IdentityUser
-                                {
-                                    UserName = adminData.Username,
-                                    Email = adminData.Email,
-                                    EmailConfirmed = true
-                                };
-                                var createResult = await userManager.CreateAsync(adminUser, adminData.Password);
+                                var adminUser =
+                                    await userManager.FindByNameAsync(
+                                        adminData.Username);
 
-                                if (createResult.Succeeded)
+                                if (adminUser == null)
                                 {
-                                    await userManager.AddToRoleAsync(adminUser, adminRole);
-                                    Console.WriteLine($"Admin '{adminData.Username}' creado con rol '{adminRole}'.");
+                                    adminUser = new IdentityUser
+                                    {
+                                        UserName = adminData.Username,
+                                        Email = adminData.Email,
+                                        EmailConfirmed = true
+                                    };
+
+                                    var createResult =
+                                        await userManager.CreateAsync(
+                                            adminUser,
+                                            adminData.Password);
+
+                                    if (createResult.Succeeded)
+                                    {
+                                        await userManager.AddToRoleAsync(
+                                            adminUser,
+                                            adminRole);
+
+                                        Console.WriteLine(
+                                            $"Admin '{adminData.Username}' creado con rol '{adminRole}'.");
+                                    }
+                                    else
+                                    {
+                                        Console.WriteLine(
+                                            $"Error al crear admin '{adminData.Username}':");
+
+                                        foreach (var error in createResult.Errors)
+                                        {
+                                            Console.WriteLine($"- {error.Description}");
+                                        }
+                                    }
                                 }
                                 else
                                 {
-                                    Console.WriteLine($" Error al crear admin '{adminData.Username}':");
-                                    foreach (var error in createResult.Errors)
+                                    if (!await userManager.IsInRoleAsync(
+                                        adminUser,
+                                        adminRole))
                                     {
-                                        Console.WriteLine($"- {error.Description}");
-                                    }
-                                }
-                            }
-                            else
-                            {
+                                        await userManager.AddToRoleAsync(
+                                            adminUser,
+                                            adminRole);
 
-                                if (!await userManager.IsInRoleAsync(adminUser, adminRole))
-                                {
-                                    await userManager.AddToRoleAsync(adminUser, adminRole);
-                                    Console.WriteLine($"Rol '{adminRole}' asignado a usuario existente '{adminUser.UserName}'.");
+                                        Console.WriteLine(
+                                            $"Rol '{adminRole}' asignado a usuario existente '{adminUser.UserName}'.");
+                                    }
                                 }
                             }
                         }
                     }
+                    else
+                    {
+                        Console.WriteLine(
+                            $"Archivo 'admins.json' no encontrado en: {jsonFilePath}");
+                    }
+
+                    // Cargar clientes desde el archivo JSON.
+                    var context =
+                        services.GetRequiredService<Dsw2025TpiContext>();
+
+                    context.Seedwork<Customer>("customers.json");
                 }
-                else
+                catch (Exception ex)
                 {
-                    Console.WriteLine($" Archivo 'admins.json' no encontrado en: {jsonFilePath}");
+                    Console.WriteLine(
+                        "Error durante la carga de administradores:");
+
+                    Console.WriteLine(ex.ToString());
                 }
-                var context = services.GetRequiredService<Dsw2025TpiContext>();
-                context.Seedwork<Customer>("customers.json");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine(" Error durante la carga de administradores:");
-                Console.WriteLine(ex.ToString());
             }
         }
+
         // Configure the HTTP request pipeline.
         if (app.Environment.IsDevelopment())
         {
