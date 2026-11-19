@@ -18,6 +18,7 @@ RUN dotnet restore "Dsw2025Tpi.Api/Dsw2025Tpi.Api.csproj"
 
 COPY . .
 WORKDIR /src/Dsw2025Tpi.Api
+
 RUN dotnet publish "Dsw2025Tpi.Api.csproj" \
     --configuration Release \
     --output /app/publish \

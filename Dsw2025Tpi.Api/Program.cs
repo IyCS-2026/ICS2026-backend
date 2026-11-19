@@ -9,6 +9,8 @@ using Dsw2025Tpi.Domain.Interfaces;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using System.Text;
@@ -23,13 +25,41 @@ public class Program
     {
         var builder = WebApplication.CreateBuilder(args);
 
-        // Add services to the container.
+        var isTesting = builder.Environment.IsEnvironment("Testing");
+
+        var connectionString = isTesting
+            ? (builder.Configuration["DB_CONNECTION_STRING"]
+                ?? "Data Source=Dsw2025Tpi_Test;Mode=Memory;Cache=Shared")
+            : (builder.Configuration["DB_CONNECTION_STRING"]
+                ?? builder.Configuration.GetConnectionString("Dsw2025TpiEntities")
+                ?? builder.Configuration.GetConnectionString("DB_CONNECTION_STRING")
+                ?? throw new InvalidOperationException(
+                    "No se configuró la connection string. Definí la app setting 'DB_CONNECTION_STRING' o 'ConnectionStrings__Dsw2025TpiEntities'."));
+
+        if (!isTesting &&
+            !OperatingSystem.IsWindows() &&
+            connectionString.Contains("(localdb)", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "La connection string apunta a LocalDB, que no está disponible en este sistema. " +
+                "Configurá en el App Service una app setting 'DB_CONNECTION_STRING' con la cadena ADO.NET de tu SQL de Azure.");
+        }
+
+        var serverPart = connectionString
+            .Split(';')
+            .FirstOrDefault(x =>
+                x.TrimStart().StartsWith("Server=", StringComparison.OrdinalIgnoreCase) ||
+                x.TrimStart().StartsWith("Data Source=", StringComparison.OrdinalIgnoreCase));
+
+        Console.WriteLine($"Conectando a base de datos: {serverPart}");
+
         builder.Services.AddLogging(config =>
         {
             config.ClearProviders();
             config.AddConsole();
 
             var path = builder.Configuration.GetValue<string>("LogPath");
+
             if (!string.IsNullOrEmpty(path))
             {
                 config.AddFile(path);
@@ -42,6 +72,7 @@ public class Program
         });
 
         builder.Services.AddEndpointsApiExplorer();
+
         builder.Services.AddSwaggerGen(o =>
         {
             o.SwaggerDoc("v1", new OpenApiInfo
@@ -78,8 +109,16 @@ public class Program
 
         builder.Services.AddDbContext<AuthenticateContext>(options =>
         {
-            options.UseSqlServer(
-                builder.Configuration.GetConnectionString("Dsw2025TpiEntities"));
+            if (isTesting ||
+                connectionString.Contains("Mode=Memory", StringComparison.OrdinalIgnoreCase) ||
+                connectionString.Contains(".db", StringComparison.OrdinalIgnoreCase))
+            {
+                options.UseSqlite(connectionString);
+            }
+            else
+            {
+                options.UseSqlServer(connectionString);
+            }
         });
 
         builder.Services.AddIdentity<IdentityUser, IdentityRole>(options =>
@@ -94,6 +133,7 @@ public class Program
         .AddErrorDescriber<SpanishIdentityErrorDescriber>();
 
         var jwtConfig = builder.Configuration.GetSection("Jwt");
+
         var keyText = jwtConfig["Key"]
             ?? throw new ArgumentNullException("JWT Key");
 
@@ -123,8 +163,16 @@ public class Program
 
         builder.Services.AddDbContext<Dsw2025TpiContext>(options =>
         {
-            options.UseSqlServer(
-                builder.Configuration.GetConnectionString("Dsw2025TpiEntities"));
+            if (isTesting ||
+                connectionString.Contains("Mode=Memory", StringComparison.OrdinalIgnoreCase) ||
+                connectionString.Contains(".db", StringComparison.OrdinalIgnoreCase))
+            {
+                options.UseSqlite(connectionString);
+            }
+            else
+            {
+                options.UseSqlServer(connectionString);
+            }
         });
 
         builder.Services.AddSingleton<JwtTokenService>();
@@ -147,10 +195,9 @@ public class Program
 
         var app = builder.Build();
 
-        // Inicialización de datos de la aplicación.
-        // En Testing se omite porque las pruebas utilizan bases SQLite
-        // que son creadas y administradas por CustomWebApplicationFactory.
-        if (!app.Environment.IsEnvironment("Testing"))
+        // En Testing, las bases son administradas por CustomWebApplicationFactory.
+        // En los demás entornos se inicializan las bases y los datos.
+        if (!isTesting)
         {
             using (var scope = app.Services.CreateScope())
             {
@@ -158,6 +205,35 @@ public class Program
 
                 try
                 {
+                    var authContext =
+                        services.GetRequiredService<AuthenticateContext>();
+
+                    if (authContext.Database.ProviderName ==
+                        "Microsoft.EntityFrameworkCore.Sqlite")
+                    {
+                        authContext.Database.EnsureCreated();
+                    }
+                    else
+                    {
+                        authContext.Database.Migrate();
+                    }
+
+                    var context =
+                        services.GetRequiredService<Dsw2025TpiContext>();
+
+                    if (context.Database.ProviderName ==
+                        "Microsoft.EntityFrameworkCore.Sqlite")
+                    {
+                        var creator =
+                            (IRelationalDatabaseCreator)context.Database.GetService<IDatabaseCreator>();
+
+                        creator.CreateTables();
+                    }
+                    else
+                    {
+                        context.Database.Migrate();
+                    }
+
                     var userManager =
                         services.GetRequiredService<UserManager<IdentityUser>>();
 
@@ -167,7 +243,6 @@ public class Program
                     string adminRole = "Admin";
                     string userRole = "User";
 
-                    // Crear roles si no existen.
                     if (!await roleManager.RoleExistsAsync(adminRole))
                     {
                         await roleManager.CreateAsync(new IdentityRole(adminRole));
@@ -180,7 +255,6 @@ public class Program
                         Console.WriteLine($"Rol '{userRole}' creado.");
                     }
 
-                    // Cargar administradores desde el archivo JSON.
                     string jsonFilePath =
                         Path.Combine(AppContext.BaseDirectory, "admins.json");
 
@@ -193,7 +267,7 @@ public class Program
                                 json,
                                 new JsonSerializerOptions
                                 {
-                                    PropertyNameCaseInsensitive = true,
+                                    PropertyNameCaseInsensitive = true
                                 });
 
                         if (adminsToSeed != null)
@@ -238,19 +312,16 @@ public class Program
                                         }
                                     }
                                 }
-                                else
+                                else if (!await userManager.IsInRoleAsync(
+                                    adminUser,
+                                    adminRole))
                                 {
-                                    if (!await userManager.IsInRoleAsync(
+                                    await userManager.AddToRoleAsync(
                                         adminUser,
-                                        adminRole))
-                                    {
-                                        await userManager.AddToRoleAsync(
-                                            adminUser,
-                                            adminRole);
+                                        adminRole);
 
-                                        Console.WriteLine(
-                                            $"Rol '{adminRole}' asignado a usuario existente '{adminUser.UserName}'.");
-                                    }
+                                    Console.WriteLine(
+                                        $"Rol '{adminRole}' asignado a usuario existente '{adminUser.UserName}'.");
                                 }
                             }
                         }
@@ -262,15 +333,12 @@ public class Program
                     }
 
                     // Cargar clientes desde el archivo JSON.
-                    var context =
-                        services.GetRequiredService<Dsw2025TpiContext>();
-
                     context.Seedwork<Customer>("customers.json");
                 }
                 catch (Exception ex)
                 {
                     Console.WriteLine(
-                        "Error durante la carga de administradores:");
+                        "Error durante la inicialización de la base de datos:");
 
                     Console.WriteLine(ex.ToString());
                 }
@@ -278,13 +346,14 @@ public class Program
         }
 
         // Configure the HTTP request pipeline.
+        app.UseSwagger();
+        app.UseSwaggerUI();
+
         if (app.Environment.IsDevelopment())
         {
-            app.UseSwagger();
-            app.UseSwaggerUI();
+            app.UseHttpsRedirection();
         }
 
-        app.UseHttpsRedirection();
         app.UseCors("AllowFrontend");
 
         app.UseMiddleware<ExceptionHandlingMiddleware>();
